@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Dependencies
+vendor/
+node_modules/
+composer.lock
+package-lock.json
+
+# Test artifacts
+.phpunit.result.cache
+.phpcs-cache
