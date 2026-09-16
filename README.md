@@ -1,5 +1,15 @@
 <div align="center">
 
+<p align="center">
+  <img
+    src="hero.png"
+    alt="wp-plugin-skill — Build secure WordPress plugins with AI"
+    width="100%"
+  >
+</p>
+
+<br>
+
 # wp-plugin-skill
 
 **Build WordPress plugins with AI that don't ship vulnerabilities.**
