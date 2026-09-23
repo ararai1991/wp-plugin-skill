@@ -1,6 +1,11 @@
 ---
 name: wp-plugin-skill
-description: Build, review, and ship production-grade WordPress plugins — architecture, hooks, admin pages, settings, custom post types, taxonomies, metadata, users and capabilities, AJAX/REST, HTTP API, cron, shortcodes, blocks, internationalization, privacy, testing, and security hardening. Use when writing any WordPress plugin PHP code, scaffolding a new plugin, adding plugin features, reviewing plugin code for bugs or vulnerabilities, handling $_GET/$_POST, registering AJAX or REST endpoints, running $wpdb queries, or preparing a plugin for the WordPress.org directory.
+description: Build, review, and ship production-grade WordPress plugins — architecture, hooks, admin pages, settings, custom post types, taxonomies, metadata, users and capabilities, AJAX/REST, HTTP API, cron, shortcodes, blocks, the Abilities API and AI Client, internationalization, privacy, testing, and security hardening. Use when writing any WordPress plugin PHP code, scaffolding a new plugin, adding plugin features, reviewing plugin code for bugs or vulnerabilities, handling $_GET/$_POST, registering AJAX or REST endpoints or abilities, adding AI features, running $wpdb queries, or preparing a plugin for the WordPress.org directory.
+license: MIT
+metadata:
+  version: "1.1.0"
+  updated: "2026-09-23"
+  repository: "https://github.com/ararai1991/wp-plugin-skill"
 ---
 
 # WordPress Plugin Development
@@ -84,6 +89,14 @@ The rule of thumb: **if getting it wrong means a security hole, data loss, or re
 
 > Does this store personal data (emails, IPs, names)? If so it needs export and erasure handlers.
 
+**AI features.** Every generation spends the site owner's money, and model output is untrusted. See `references/ai-abilities.md`.
+
+> Who should be able to trigger AI generation? Does the prompt include content other users wrote or personal data? Should output be published automatically, or reviewed by a person first?
+
+**Import, restore, or "upload a file" features.** These can write executable PHP — the path behind a 2026 RCE on 3M+ sites.
+
+> Should this import accept only data (CSV/JSON), or archives too? It needs `manage_options` at minimum; anything that can install code needs `install_plugins`.
+
 ### Ask when it materially changes the work
 
 - **Scale** — "how many records do you expect?" decides meta vs. custom table, and whether pagination is needed.
@@ -148,6 +161,7 @@ Pick the file matching the task. Each maps to a Plugin Handbook chapter.
 | Directory submission, Plugin Check, guidelines | `references/plugin-directory.md` |
 | Ordered security review checklist with grep patterns | `references/audit-checklist.md` |
 | Supply-chain and planted-backdoor detection | `references/backdoor-indicators.md` |
+| Abilities API (6.9+), AI Client and Connectors (7.0+), prompt injection | `references/ai-abilities.md` |
 
 ## Non-negotiable rules
 
@@ -196,3 +210,17 @@ Follow [WordPress Coding Standards](https://developer.wordpress.org/coding-stand
 - `wp_schedule_event()` without a `wp_next_scheduled()` guard — duplicate events
 - Enqueuing on every page instead of conditionally
 - Direct `$wpdb` query where a core API (`WP_Query`, `get_posts`, `get_option`) exists
+
+Patterns behind the worst plugin CVEs of 2026 (`references/security.md` Part 3):
+
+- A homemade "safe unserialize" helper that inspects data before `unserialize()` — always bypassable
+- `is_callable( $x )` as the only gate before calling `$x`; `extract()` on attributes or stored data
+- Comments or other user content passed to `do_blocks()`, `do_shortcode()`, or `the_content` — unapproved comments included
+- SQL built from *stored* values without `prepare()` — especially in restore, migration, and search-replace code
+- Import/restore that can extract files into `mu-plugins/`, `plugins/`, or the webroot
+- A reset key, restore key, or secret appearing in any response, redirect, or log
+- `wp_set_auth_cookie()` reached from an SSO/magic-link flow without signature, expiry, audience, and single-use checks
+- An ability with `__return_true` permissions, or a destructive ability annotated `readonly`
+- Model output echoed unescaped, or used as SQL, a callable, a URL, or a path
+
+**Speed matters.** The median time from disclosure to mass exploitation is about five hours, and WordPress.org now blocks releases that fail its automated security review. Treat a critical finding as a same-day fix.

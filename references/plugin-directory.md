@@ -17,7 +17,21 @@ wp plugin check <your-plugin-slug> --categories=security
 
 Plugin Check combines PHPCS sniffs (PHPCompatibility, WordPress-Core, WordPress-Docs, and the `WordPress.Security.*` sniffs from WordPress-Extra) with custom static checks and some runtime checks that activate the plugin and fire hooks.
 
-Since late 2025, the directory also generates automated security reports after each plugin update — issues surface post-release, not only at submission.
+## Every release is security-reviewed — and can be blocked
+
+Since late 2025 the directory generated security reports after each update. In 2026 that became a gate:
+
+- **June 5, 2026** — every plugin release enters a **6-hour cooldown** before it is distributed through the update API.
+- **September 9, 2026** — during that window, releases are scanned by several AI models together with Jetpack Scan. **High-risk releases are blocked automatically** and not distributed until fixed. Committers get an email with the findings.
+
+What it flags is exactly what this skill's security reference covers: unescaped output, missing capability checks, SQL injection risk, unsafe deserialization, and unsafe file operations. It also catches planted backdoors — one was stopped 26 minutes after commit in July 2026.
+
+What this means in practice:
+
+- **A security bug now blocks your release**, not just a later report. Run Plugin Check and `scripts/wp-plugin-audit.sh` *before* tagging.
+- **Hotfixes take at least 6 hours to reach users.** Plan emergency releases accordingly, and never rely on "we'll push a fix in ten minutes".
+- **If blocked:** read the findings, fix, and publish a new release. Resubmitting a fix is typically faster than disputing a finding; contact the Plugins Team only when a finding is genuinely wrong.
+- No email means no action needed.
 
 ## Security-relevant guideline requirements
 
@@ -54,6 +68,8 @@ update_option( 'myplugin_settings', $v );
 ## Pre-submission checklist
 
 - [ ] Plugin Check passes with zero Security-category errors
+- [ ] `scripts/wp-plugin-audit.sh` shows no unexplained critical hits — a flagged release is now blocked, not just reported
+- [ ] `Requires PHP` is 7.4 or higher (WordPress 7.0 dropped PHP 7.2 and 7.3; 8.3 is recommended)
 - [ ] `readme.txt` valid, with accurate `Requires at least`, `Tested up to`, `Requires PHP`
 - [ ] Main file header complete: Plugin Name, Description, Version, Author, License, Text Domain
 - [ ] `defined( 'ABSPATH' ) || exit;` at the top of every PHP file
@@ -90,11 +106,41 @@ if ( is_multisite() ) {
 
 ## Handling a reported vulnerability
 
+Speed matters more than it used to: the median time from public disclosure to mass exploitation of a high-impact WordPress plugin bug was **5 hours** in 2025, and 46% of vulnerabilities had no fix available at disclosure.
+
 1. Confirm and fix promptly — the directory closes plugins with unresolved security issues, and in serious cases the WordPress Security team may push a forced update.
-2. Release the fix as a new version and bump the version number.
+2. Release the fix as a new version and bump the version number. Remember the 6-hour release cooldown.
 3. Note the fix in the changelog. Do not hide it — but do not publish exploit details before users have had time to update.
 4. Request a CVE through Wordfence or Patchstack if the reporter has not.
 5. If the plugin was closed, fix the issue and pass all Plugin Check security checks before requesting relisting.
+6. If the flaw is **actively exploited** and you are in scope of the EU Cyber Resilience Act, the reporting clock is already running — see below.
+
+## EU Cyber Resilience Act
+
+The CRA applies to **products with digital elements made available on the EU market in the course of a commercial activity** — which includes paid plugins and themes sold to anyone in the EU, wherever the vendor is based. Purely non-commercial open-source plugins are generally out of scope; open-source *stewards* (organizations that systematically support open-source products used commercially) carry lighter obligations and cannot be fined. If you monetize a plugin — paid tiers, licenses, a freemium upsell — treat yourself as in scope and get proper advice.
+
+**From 11 September 2026 — reporting obligations apply:**
+
+| When you become aware of… | Deadline | What |
+|---|---|---|
+| An actively exploited vulnerability, or a severe incident | **24 hours** | Early warning via ENISA's single reporting platform |
+| | **72 hours** | Notification: technical details, mitigations, indicators of compromise |
+| | 14 days after a fix (vulnerability) / 1 month (incident) | Final report |
+
+Users must also be informed. The clock starts when **you** become aware — not when a regulator contacts you.
+
+**What to have in place now** (small-vendor minimum):
+
+- A monitored security contact address
+- `/.well-known/security.txt` (RFC 9116) on your site, pointing to it
+- A published coordinated vulnerability disclosure policy
+- A one-page internal procedure: who decides "actively exploited", who holds the ENISA account, message templates for 24h/72h/final reports, how users are notified
+- A software bill of materials — at least your top-level dependencies (`composer.json`, `package.json`, bundled libraries)
+- A way to monitor those dependencies for new vulnerabilities
+
+**From 11 December 2027 — full obligations:** security-by-design requirements (Annex I), technical documentation, EU declaration of conformity, CE marking, and a defined security-support period (typically at least five years). Penalties reach €15 million or 2.5% of worldwide turnover.
+
+This is a summary, not legal advice.
 
 ## Ongoing
 

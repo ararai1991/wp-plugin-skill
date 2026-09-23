@@ -142,15 +142,61 @@ grep -rn "include *\$\|require *\$\|include_once *\$\|require_once *\$" --includ
 - [ ] `maybe_unserialize()` not applied to data that originated from user input
 - [ ] No `eval`, `assert`, `create_function`, `preg_replace` with `/e`
 - [ ] No `system`, `exec`, `shell_exec`, `passthru`, `popen`, `proc_open` with user input
-- [ ] No `extract()` on request data
+- [ ] No `extract()` on request data, block attributes, shortcode attributes, or any stored user content
 - [ ] No `call_user_func` / `call_user_func_array` with a user-supplied callback name
+- [ ] `is_callable()` is never the only gate before calling something — callbacks come from a hardcoded map
+- [ ] No homemade "safe unserialize" / `contains_object` / regex pre-check helpers — only `allowed_classes => false` counts
 - [ ] No variable variables (`$$var`) driven by input
 
 ```bash
 grep -rn "unserialize\|maybe_unserialize" --include=*.php .
+grep -rn "unserialize(" --include=*.php . | grep -v "allowed_classes"   # every hit needs justification
+grep -rniE "function [a-z_]*(safe_?unserial|is_safe|contains_object)" --include=*.php .
 grep -rn "\beval\b\|assert(\|create_function\|preg_replace( *['\"].*e['\"]" --include=*.php .
 grep -rn "shell_exec\|passthru\|proc_open\|popen\|\bsystem(\|\bexec(" --include=*.php .
-grep -rn "extract(\|call_user_func" --include=*.php .
+grep -rn "extract(\|call_user_func\|is_callable(" --include=*.php .
+```
+
+---
+
+## Phase 7b — Content parsing, stored data, and imports
+
+Patterns behind the most severe plugin CVEs of 2026 — see `security.md` Part 3.
+
+- [ ] Comments, form entries, reviews, and other user content never reach `do_blocks()`, `do_shortcode()`, `parse_blocks()`, or `apply_filters( 'the_content' )`
+- [ ] Pending/unapproved content is treated as attacker input (the submitter can preview it)
+- [ ] Every query built from **stored** data is prepared — restores, migrations, cron jobs, and search-replace included
+- [ ] Runtime table names (prefix rewrites) validated against `/^[A-Za-z0-9_]+$/`
+- [ ] Import/restore/archive features require `manage_options` (or `install_plugins`) **and** a nonce, not just a secret key
+- [ ] Archive entries validated before extraction; nothing extracted into `plugins/`, `mu-plugins/`, themes, or the webroot
+- [ ] No response, redirect, log, or error message contains reset keys, activation keys, restore keys, or API secrets
+- [ ] Every path to `wp_set_auth_cookie()` / `wp_set_current_user()` / `wp_signon()` verifies signature, expiry, audience, and single use — and never takes the user ID from the request
+- [ ] Related objects in responses (parent, attachment, author) each get a `read_post` / `edit_post` check
+
+```bash
+grep -rn "do_blocks(\|do_shortcode(\|parse_blocks(" --include=*.php .
+grep -rn "comment_content\|get_comment_text" --include=*.php .
+grep -rn "get_password_reset_key\|wp_set_auth_cookie\|wp_set_current_user\|wp_signon" --include=*.php .
+grep -rn "ZipArchive\|unzip_file\|PharData\|extractTo" --include=*.php .
+```
+
+---
+
+## Phase 7c — Abilities and AI features
+
+Only if the plugin targets WordPress 6.9+ / 7.0+ — see `ai-abilities.md`.
+
+- [ ] Every `wp_register_ability()` has a real `permission_callback`, with object-level checks using the input
+- [ ] Abilities that write, delete, publish, email, or spend are annotated `destructive => true` — never `readonly`
+- [ ] `meta.public` is `true` only for abilities meant for agents and REST clients
+- [ ] AI features are server-side endpoints with capability checks and per-user rate limits; no `nopriv` prompt actions
+- [ ] Model output is escaped on output and never used as SQL, a callable, a URL, a file path, a shortcode, or an option name
+- [ ] Generated content is reviewed by a human before publishing, or the owner has explicitly opted in
+- [ ] No personal data sent in prompts without disclosure in the privacy policy text
+- [ ] No plugin-owned "paste your AI provider key" field when the core AI Client covers the use case
+
+```bash
+grep -rn "wp_register_ability\|wp_ai_client_prompt\|generate_text\|generate_image" --include=*.php .
 ```
 
 ---
@@ -198,6 +244,8 @@ grep -rn "error_log\|var_dump\|print_r\|debug_backtrace" --include=*.php .
 - [ ] No obfuscated, minified, or unreadable PHP
 - [ ] No remote code fetched and executed at runtime
 - [ ] Auto-update mechanisms verify signatures over TLS
+- [ ] No hardcoded usernames/passwords passed to `wp_create_user()` / `wp_insert_user()`
+- [ ] No "make sure this user exists" logic that recreates an account
 - [ ] See `backdoor-indicators.md` for the full pass
 
 ---

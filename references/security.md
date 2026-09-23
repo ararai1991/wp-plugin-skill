@@ -602,3 +602,152 @@ Always `exit;` after a redirect — without it, execution continues and the code
 - Add a blank `index.php` to every plugin subdirectory as defense in depth against directory listing.
 - Do not expose user emails, hashes, or private post data via REST or AJAX responses without a capability check on the reader.
 - Avoid timing-unsafe comparisons for tokens; use `hash_equals()` for secret comparison.
+
+---
+
+# Part 3 — Patterns From Recent Incidents (2026)
+
+The eight classes above name *what* goes wrong. These are the specific *developer mistakes* behind the most severe plugin CVEs of 2026 — each sat in a plugin with hundreds of thousands to millions of installs, and each was exploitable without logging in.
+
+Context that should change how urgently you treat any finding: in 2025 there were **11,334** new WordPress ecosystem vulnerabilities (+42% year over year), **91%** in plugins; **46%** had no patch at disclosure; **broken access control was the most exploited class**; and the **median time from disclosure to mass exploitation was 5 hours**. There is no "patch it next sprint" for a critical plugin bug.
+
+## A. Homemade "safe unserialize" helpers
+
+Two separate 2026 critical RCEs (a donation plugin, CVSS 10.0; an events plugin, CVSS 9.8) had a helper that *checked* serialized data for objects and then unserialized it. Both checks were bypassable: malformed trailing data made the pre-check `unserialize()` return `false`, the helper concluded "no objects present", and the real deserialization then started restoring objects — firing magic methods — before failing.
+
+```php
+// VULNERABLE — every variant of "inspect, then unserialize" races the parser
+function myplugin_is_safe( $data ) {
+    $probe = @unserialize( $data );                  // returns false on malformed input…
+    return ! myplugin_contains_object( $probe );     // …so this says "safe"
+}
+if ( myplugin_is_safe( $raw ) ) {
+    $value = unserialize( $raw );                    // objects instantiated here
+}
+
+// Also VULNERABLE — regex filters for "O:" are bypassed ("C:", nesting, whitespace)
+if ( ! preg_match( '/O:\d+:/', $raw ) ) { $value = unserialize( $raw ); }
+```
+
+```php
+// FIXED — let PHP enforce it, or don't deserialize at all
+$value = json_decode( $raw, true );                                   // preferred
+$value = unserialize( $raw, array( 'allowed_classes' => false ) );    // if you must
+```
+
+**Rule:** there is no safe way to *inspect* attacker-controlled serialized data before unserializing it. Only `allowed_classes => false`, or not using `unserialize()`, is safe. Treat any helper named `*safe*unserialize*`, `is_safe_*`, or `contains_object` as a red flag.
+
+## B. `is_callable()` is not an allowlist
+
+An events plugin let template attributes flow through `extract()` into a variable that was later called if `is_callable()` returned true. An attacker supplied `wp_update_user` as the "callable" with their own arguments, reset the administrator's password, logged in, and uploaded a plugin.
+
+```php
+// VULNERABLE — is_callable() only proves the function EXISTS
+extract( $attributes );                      // attacker now controls $callback, $classes, …
+if ( is_callable( $callback ) ) {
+    $result = call_user_func( $callback, $value );
+}
+```
+
+```php
+// FIXED — map input to a fixed set of known callbacks; never extract() untrusted data
+$formatters = array(
+    'upper' => 'strtoupper',
+    'title' => 'ucwords',
+);
+$key = sanitize_key( $attributes['format'] ?? '' );
+if ( isset( $formatters[ $key ] ) ) {
+    $result = call_user_func( $formatters[ $key ], $value );
+}
+```
+
+Any value that becomes a function name, method name, class name, hook name, or `array_map()` callback must come from a hardcoded map — never from data.
+
+## C. Untrusted content reaching block and shortcode parsers
+
+The same events plugin passed its whole template — **including comments, and including *unapproved* comments shown through WordPress's moderation-preview link** — to `do_blocks()`. A comment box became a way to feed arbitrary block attributes to server-side render callbacks.
+
+```php
+// VULNERABLE
+echo do_blocks( $template_html . $comments_html );
+echo do_shortcode( $comment->comment_content );
+echo apply_filters( 'the_content', get_comment_text() );   // runs do_blocks + do_shortcode
+```
+
+```php
+// FIXED — parse only content written by someone with the right capability;
+// render user-submitted text as text
+echo do_blocks( $template_html );
+echo wp_kses_post( wpautop( $comment->comment_content ) );
+```
+
+Comments, form submissions, reviews, and any front-end user content must never reach `do_blocks()`, `do_shortcode()`, `parse_blocks()`, or `apply_filters( 'the_content' )`. "Pending moderation" is not "safe" — the submitter can preview a pending comment, so its content still renders.
+
+## D. Second-order SQL injection
+
+A backup/migration plugin on 3M+ sites (CVSS 8.8) stored attacker text that arrived through a public channel (trackbacks), then later — during a restore that rewrote URLs and table prefixes — concatenated that stored text into SQL. A trailing backslash broke out of the string. The injection leaked a restore secret, which unlocked importing an archive containing a **must-use plugin**: RCE on the next page load.
+
+```php
+// VULNERABLE — "it came from our own database" is not a trust boundary
+$old = get_option( 'myplugin_old_url' );
+$wpdb->query( "UPDATE {$table} SET content = REPLACE(content, '{$old}', '{$new}') WHERE id = {$row->id}" );
+```
+
+```php
+// FIXED — prepare EVERY query: imports, migrations, cron, stored values included
+$wpdb->query( $wpdb->prepare(
+    "UPDATE {$table} SET content = REPLACE(content, %s, %s) WHERE id = %d",
+    $old, $new, $row->id
+) );
+```
+
+Data in your own tables was written by someone — often anonymously (comments, trackbacks, form entries, order notes). Every query uses `prepare()` regardless of where the value came from. Table names built at runtime (prefix rewrites during restore) must match `/^[A-Za-z0-9_]+$/` before interpolation.
+
+## E. Import, restore, and "upload a package" features are code execution
+
+That chain ended by writing a file into `wp-content/mu-plugins/`. Any feature that unpacks an archive, restores a backup, or imports settings can put PHP somewhere WordPress will run it.
+
+- Require `manage_options` (or `install_plugins` if it can write code) **and** a nonce — never a secret key alone.
+- Validate every archive entry with `realpath()` containment *before* extracting; reject `..`, absolute paths, and symlinks.
+- Never extract into `WP_PLUGIN_DIR`, `WPMU_PLUGIN_DIR`, a theme directory, or the webroot.
+- Reject executable extensions (`php`, `phtml`, `phar`, `.htaccess`) unless installing code is the feature's explicit purpose — in which case require `install_plugins`.
+- Use `unzip_file()` / `WP_Filesystem` rather than `ZipArchive::extractTo()` on an unvalidated archive.
+
+## F. Leaking tokens in responses
+
+A translation plugin (CVSS 9.8) exposed the **plaintext password-reset key** in a response under certain conditions — enough to take over the administrator account with no other bug. The migration plugin lost its restore secret the same way, through a REST response.
+
+- Never put `get_password_reset_key()` output, activation keys, restore keys, API secrets, or another user's nonce in any response, redirect URL, log line, or error message.
+- Audit what your REST/AJAX responses serialize: returning a whole `WP_User`, options array, or settings object often includes secrets.
+- Compare secrets with `hash_equals()`; store tokens hashed, as core does for reset keys.
+- Keys guarding dangerous operations must be single-use and expiring.
+
+## G. Trusting external identity (SSO, OAuth, magic links)
+
+A site-management plugin (CVSS 9.8) had an SSO flow that could be driven to log an unauthenticated visitor in as an administrator.
+
+When a plugin accepts identity from elsewhere — SSO, OAuth callbacks, "log in with…", magic links, signed URLs from a SaaS dashboard — verify all of these before calling `wp_set_auth_cookie()`:
+
+- **Signature** — verified with the provider's key, constant-time; algorithm fixed server-side, never read from the token.
+- **Expiry and issue time** — short-lived; reject stale tokens.
+- **Audience / site binding** — minted *for this site*.
+- **Single use** — store and reject replayed token IDs and `state` values.
+- **User mapping** — the WordPress user comes from your verified mapping, never from a `user_id` or `email` the request supplies.
+
+```php
+// VULNERABLE — the request chooses who to become
+$user_id = absint( $_GET['uid'] );
+if ( myplugin_token_looks_valid( $_GET['token'] ) ) {
+    wp_set_auth_cookie( $user_id );
+}
+```
+
+Any code path ending in `wp_set_auth_cookie()`, `wp_set_current_user()`, or `wp_signon()` deserves the same scrutiny as the login form itself.
+
+## H. Contributors are attackers too
+
+WordPress 7.1.1 (September 2026) fixed eleven core issues; several were authorization gaps reachable by a **contributor** or any logged-in user: overwriting others' posts, discovering draft slugs through REST, reparenting comments, and a missing `read_post` check leaking a private post's title. Plugins repeat these mistakes constantly.
+
+- Check the **object**, not just the capability: `current_user_can( 'edit_post', $id )`, `current_user_can( 'read_post', $id )`.
+- Responses that include related objects (parent post, attached post, author) need a `read_post` check on *each* related object.
+- Anything that changes an object's relationships — parent, author, terms, owner — needs an edit check on **both** the object and the new target.

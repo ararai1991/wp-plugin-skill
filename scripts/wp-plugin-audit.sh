@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# wp-plugin-audit.sh — grep-based security triage for a WordPress plugin.
+# wp-plugin-audit.sh — grep-based security and correctness triage for a
+# WordPress plugin. Part of wp-plugin-skill.
 #
 # Usage: ./wp-plugin-audit.sh <plugin-directory>
+#        ./wp-plugin-audit.sh --version
 #
 # This is triage, not proof. Every hit needs manual confirmation: check whether
 # the code path is reachable, who can reach it, and whether a control exists
@@ -11,6 +13,19 @@
 # would otherwise expand or mangle. Do not convert them to double quotes.
 
 set -uo pipefail
+
+VERSION="1.1.0"
+
+case "${1:-}" in
+    -v|--version)
+        printf 'wp-plugin-audit %s\n' "$VERSION"
+        exit 0
+        ;;
+    -h|--help)
+        sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+esac
 
 DIR="${1:-.}"
 
@@ -97,7 +112,7 @@ paired() {
     return 0
 }
 
-printf '\033[1mWordPress Plugin Audit\033[0m\n'
+printf '\033[1mWordPress Plugin Audit\033[0m  \033[2mv%s\033[0m\n' "$VERSION"
 printf 'Target: %s\n' "$DIR"
 printf 'PHP files: %s\n' \
     "$(find "$DIR" -name '*.php' -not -path '*/vendor/*' -not -path '*/node_modules/*' 2>/dev/null | wc -l | tr -d ' ')"
@@ -267,9 +282,9 @@ check '!unserialize() on request data' \
     '(unserialize|maybe_unserialize)\([^)]*\$_(GET|POST|REQUEST|COOKIE)' \
     'PHP object injection -> POP chain -> RCE.'
 
-check 'Deserialization' \
-    '(unserialize|maybe_unserialize)\(' \
-    "Prefer json_decode(), or pass ['allowed_classes' => false]."
+check 'maybe_unserialize() call sites' \
+    'maybe_unserialize\s*\(' \
+    'Unserializes anything that looks serialized, with no allowed_classes. Never on data a user could have written.'
 
 check '!Code execution sinks' \
     '(^|[^a-z_>$])(eval|assert|create_function)\s*\(' \
@@ -294,6 +309,67 @@ check 'extract() usage' \
 check '!preg_replace /e modifier' \
     'preg_replace\(\s*.[^,]*e[^,]*,' \
     'The /e modifier executes the replacement as PHP code.'
+
+# unserialize() calls that don't pass allowed_classes on the same line.
+UNSER_NOCLASS="$( SEARCH '(^|[^_a-z])unserialize\s*\(' | grep -v 'allowed_classes' || true )"
+if [ -n "$UNSER_NOCLASS" ]; then
+    n="$( printf '%s\n' "$UNSER_NOCLASS" | wc -l | tr -d ' ' )"
+    TOTAL=$(( TOTAL + n ))
+    printf '\n\033[1;33m[%s]\033[0m (%s)\n' 'unserialize() without allowed_classes' "$n"
+    printf '  \033[2m%s\033[0m\n' "Pass ['allowed_classes' => false] or use json_decode(). Pre-checks cannot make this safe."
+    printf '%s\n' "$UNSER_NOCLASS" | head -n 20 | sed 's/^/  /'
+fi
+
+# ---------------------------------------------------------------------------
+section "7b. PARSERS, AUTH FLOWS, IMPORTS & AI (2026 incident patterns)"
+
+check '!Homemade "safe unserialize" helper' \
+    'function\s+[A-Za-z_]*([Ss]afe_?[Uu]nserial|is_safe_|contains_object)' \
+    'Inspect-then-unserialize helpers were bypassed in two 2026 CVSS 9.8-10.0 RCEs. Use allowed_classes => false.'
+
+check '!User content passed to a block/shortcode parser' \
+    '(do_blocks|do_shortcode|parse_blocks)\s*\([^;]*(comment|get_comment_text|_POST|_GET|_REQUEST)' \
+    'Comments (even unapproved ones) and submissions must never reach do_blocks/do_shortcode — 2026 unauthenticated RCE.'
+
+check '!User content run through the_content filter' \
+    "apply_filters\(\s*.the_content.\s*,[^;]*(comment|_POST|_GET|_REQUEST)" \
+    'the_content runs do_blocks() and do_shortcode() on it.'
+
+check 'Block/shortcode parser call sites' \
+    '(do_blocks|do_shortcode|parse_blocks)\s*\(' \
+    'Confirm the input is only content written by a user with the right capability.'
+
+check 'is_callable() gate' \
+    'is_callable\s*\(\s*\$' \
+    'is_callable() proves a function exists, not that it is allowed. Map input to a hardcoded callback list.'
+
+check '!Auth cookie for a request-supplied user' \
+    'wp_set_(auth_cookie|current_user)\s*\(\s*((absint|intval)\s*\(\s*|\(int\)\s*)?\$_(GET|POST|REQUEST|COOKIE)' \
+    'The request chooses which account to log in as — authentication bypass.'
+
+check 'Password reset key generation' \
+    'get_password_reset_key\s*\(' \
+    'Verify the key is only emailed — never returned in a response, redirect, or log (2026 CVSS 9.8 takeover).'
+
+check '!Hardcoded credentials in user creation' \
+    'wp_create_user\s*\(\s*.[A-Za-z0-9_.-]+.\s*,\s*.[^,)]{6,}' \
+    'A literal username/password is a backdoor pattern (e.g. the 2026 "DebugMaster Pro" fake plugin).'
+
+check 'Archive extraction' \
+    '(ZipArchive|PharData|extractTo\s*\(|unzip_file\s*\()' \
+    'Import/restore can write PHP (e.g. into mu-plugins). Require manage_options + nonce; validate entry paths first.'
+
+check 'Abilities API registration' \
+    'wp_register_ability\s*\(' \
+    'Verify: real permission_callback using the input, destructive => true for writes, public only when intended.'
+
+check 'AI Client prompt' \
+    'wp_ai_client_prompt\s*\(' \
+    'Verify: capability check + per-user rate limit, output escaped and never executed, no personal data without disclosure.'
+
+check '!AI prompt from an unauthenticated action' \
+    "add_action\(\s*.wp_ajax_nopriv_[a-z0-9_]*(ai|prompt|generate|gpt|llm)" \
+    'Anyone on the internet can spend the site owner'"'"'s AI budget and inject prompts.'
 
 # ---------------------------------------------------------------------------
 section "8. SSRF & REDIRECTS"
@@ -360,9 +436,17 @@ check 'Header-gated activation' \
     '\$_SERVER\[.HTTP_|getallheaders|apache_request_headers' \
     'Conditional-trigger backdoors hide behind custom headers.'
 
-check 'Writes/reads outside the plugin' \
-    '(ABSPATH|WP_CONTENT_DIR|WPMU_PLUGIN_DIR|wp-config|wp-includes|mu-plugins|\.htaccess)' \
-    'Persistence that survives plugin deletion.'
+# Paths outside the plugin — minus the two ABSPATH uses every plugin should have:
+# the direct-access guard, and loading core admin includes.
+OUTSIDE="$( SEARCH '(ABSPATH|WP_CONTENT_DIR|WPMU_PLUGIN_DIR|wp-config|wp-includes|mu-plugins|\.htaccess)' \
+    | grep -vE "defined\s*\(\s*.ABSPATH|(require|include)(_once)?\s*\(?\s*ABSPATH\s*\.\s*.wp-admin/includes/" || true )"
+if [ -n "$OUTSIDE" ]; then
+    n="$( printf '%s\n' "$OUTSIDE" | wc -l | tr -d ' ' )"
+    TOTAL=$(( TOTAL + n ))
+    printf '\n\033[1;33m[%s]\033[0m (%s)\n' 'Writes/reads outside the plugin' "$n"
+    printf '  \033[2m%s\033[0m\n' 'Persistence that survives plugin deletion (mu-plugins, core files, wp-config, .htaccess).'
+    printf '%s\n' "$OUTSIDE" | head -n 20 | sed 's/^/  /'
+fi
 
 check '!Hiding from the admin UI' \
     '(pre_current_active_plugins|all_plugins|pre_user_query|views_users|pre_set_site_transient)' \
@@ -474,6 +558,20 @@ check '~Direct SQL where a core API exists' \
 check '~Unbounded query' \
     "('posts_per_page'|'numberposts'|'number')\s*=>\s*-1" \
     'Loads every row into memory; breaks as the site grows.'
+
+paired '~Abilities registered outside wp_abilities_api_init' \
+    'wp_register_ability\s*\(' \
+    'wp_abilities_api_init' \
+    'Must register on wp_abilities_api_init (categories on wp_abilities_api_categories_init), which also keeps it safe on WordPress < 6.9.'
+
+paired '~AI Client used without a version guard' \
+    'wp_ai_client_prompt\s*\(' \
+    'function_exists\(\s*.wp_ai_client_prompt' \
+    'wp_ai_client_prompt() only exists on WordPress 7.0+; fatal error on older sites.'
+
+check '~Requires PHP below 7.4' \
+    'Requires PHP:\s*(5\.|7\.[0-3]([^0-9]|$))' \
+    'WordPress 7.0 requires PHP 7.4 minimum (8.3 recommended). Raise the header to match what you test against.'
 
 check '~Autoloaded option (verify size)' \
     'add_option\(\s*[^,]+,\s*[^,]+\s*\)' \

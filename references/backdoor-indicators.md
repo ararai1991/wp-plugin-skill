@@ -72,6 +72,31 @@ grep -rn "wp_set_auth_cookie\|wp_signon" --include=*.php .
 
 A plugin creating a user, granting a capability, or setting an auth cookie outside a documented feature is a backdoor. Watch for code that hides a user from the admin user list (filtering `pre_user_query`, `views_users`, or the user count).
 
+### Disguised as developer tooling (2026 pattern)
+
+A backdoor found by Sucuri in 2026 shipped as **"DebugMaster Pro"** in `wp-content/plugins/DebugMaster/`. It looked like a debugging utility, and it:
+
+- created an administrator with **hardcoded credentials**,
+- filtered that user out of user queries and itself out of the plugin list,
+- sent site data to a remote server.
+
+A companion file, **`wp-user.php` in the WordPress root** — a name chosen to look like core — checked on every load that the attacker's admin existed and **recreated it if deleted**. Deleting the user or the plugin alone did not end access.
+
+Signals to check for:
+
+```bash
+# A user created with a literal username/password in code
+grep -rnE "wp_(create|insert)_user\([^)]*['\"][a-z0-9_]+['\"]\s*,\s*['\"][^'\"]{6,}['\"]" --include=*.php .
+
+# "Ensure this user exists" logic: username_exists / get_user_by followed by creation
+grep -rn "username_exists\|get_user_by( *'login'" --include=*.php .
+
+# Root-level PHP files that are not core (compare against a clean download of the same version)
+wp core verify-checksums
+```
+
+A plugin name suggesting debugging, caching, security, or "maintenance" — especially with **no WordPress.org listing, no readme, and a capitalized folder name** — is a common disguise. WordPress.org's automated release review now blocks many of these at the directory; plugins installed from zip files, nulled "premium" downloads, or left behind by a previous compromise bypass that entirely.
+
 ## Callback to external infrastructure
 
 ```bash
