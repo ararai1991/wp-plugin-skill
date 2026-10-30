@@ -95,6 +95,21 @@ jQuery( document ).ready( function ( $ ) {
 
 Writing `$(...)` at top level gives `Uncaught TypeError: $ is not a function`. Never deregister core jQuery to load your own from a CDN — it breaks the admin and other plugins.
 
+**`$( string )` builds HTML when the string starts with `<`.** WordPress 7.1.3 (October 2026) fixed a stored XSS where a link's `href`, taken from a pending comment, was passed to `$()`. An unauthenticated commenter got script running in a moderator's session. Raw attribute values (`getAttribute()`, `.attr()`, `.data()`) and decoded strings can start with `<`.
+
+```js
+// VULNERABLE — raw attribute, data-* value, or response data as a jQuery argument
+const $panel = $( this.getAttribute( 'href' ) );
+const $item  = $( $( this ).data( 'target' ) );
+$list.html( response.data.label );
+
+// FIXED — selector-only lookups and text insertion
+const $panel = $( document ).find( this.getAttribute( 'href' ) );
+$list.text( response.data.label );
+```
+
+The same applies to `.html()`, `.append()`, `.prepend()`, `.before()`, `.after()`, `innerHTML`, and `insertAdjacentHTML()`: data goes in through `.text()`, `textContent`, or `.attr()`. Escaping in PHP doesn't help once JavaScript reads the value back out of the DOM and re-inserts it as HTML.
+
 ## AJAX
 
 The endpoint is `admin-ajax.php`. The `action` parameter selects the hook.
@@ -200,5 +215,7 @@ Use it rather than hardcoding the dependency array.
 - **Echoing before `wp_send_json_*`** — corrupts the JSON
 - **Forgetting `wp_die()`** in a hand-rolled AJAX handler (returns a trailing `0`)
 - **Unescaped data in inline scripts** — use `wp_json_encode()`
+- **`$( untrusted )`, `.html( data )`, `innerHTML = data`** — DOM XSS that PHP escaping cannot prevent
+- **Interactivity API URLs set from state** without an `http:`/`https:` check — `data-wp-bind--href` updates after server-side escaping has run
 - **Deregistering core jQuery**
 - **Hardcoded asset URLs** instead of `plugins_url()`

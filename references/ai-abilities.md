@@ -147,7 +147,9 @@ Builder methods: `with_text()`, `using_system_instruction()`, `using_temperature
 
 With the AI Client, **plugins never touch API keys** — the site owner configures a provider under Settings → Connectors and WordPress routes the request. Do not add your own "paste your OpenAI key" field when the AI Client covers the use case.
 
-Keys resolve in order: environment variable (`{PROVIDER}_API_KEY`), then a `wp-config.php` constant, then the database option. Keys saved through the admin screen sit in `wp_options` **unencrypted** (masked in the UI only). If your plugin integrates a non-AI service and must store a key, recommend a constant or environment variable in your docs, never echo the stored key back into a field, and never log it.
+Keys resolve in order: environment variable (`{PROVIDER}_API_KEY`), then a `wp-config.php` constant, then the database option. Keys saved through the admin screen sit in `wp_options` **unencrypted** (masked in the UI only). If your plugin integrates a non-AI service and must store a key, recommend a constant or environment variable in your docs, never echo the stored key back into a field, and never log it. On WordPress 7.2+, store it with the **Secrets API**, which encrypts it at rest. The fallback order and the rules are in `security.md` §8, "Storing credentials".
+
+Chat and assistant features that accept **file uploads** are upload endpoints like any other, and attackers scan for them. An AI chat plugin disclosed in October 2026 (CVSS 9.8) let unauthenticated visitors upload malicious files because it lacked file validation. Apply `security.md` §5a and Part 3 section I: allowlist extensions, keep the path server-side, and store files outside the webroot.
 
 ### Security rules for AI features
 

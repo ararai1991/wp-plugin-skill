@@ -109,7 +109,7 @@ if ( is_multisite() ) {
 Speed matters more than it used to: the median time from public disclosure to mass exploitation of a high-impact WordPress plugin bug was **5 hours** in 2025, and 46% of vulnerabilities had no fix available at disclosure.
 
 1. Confirm and fix promptly — the directory closes plugins with unresolved security issues, and in serious cases the WordPress Security team may push a forced update.
-2. Release the fix as a new version and bump the version number. Remember the 6-hour release cooldown.
+2. Release the fix as a new version and bump the version number. Remember the 6-hour release cooldown, and remember that the **diff is the disclosure**. Attackers built working exploits from core's September 2026 patch diff within hours. Don't land the fix in a public repository (GitHub or SVN `trunk`) long before you tag the release, and ship every supported branch at once. Keep the commit message neutral until users have updated.
 3. Note the fix in the changelog. Do not hide it — but do not publish exploit details before users have had time to update.
 4. Request a CVE through Wordfence or Patchstack if the reporter has not.
 5. If the plugin was closed, fix the issue and pass all Plugin Check security checks before requesting relisting.
@@ -148,3 +148,6 @@ This is a summary, not legal advice.
 - Keep `Tested up to` current — an unmaintained-looking plugin is a target.
 - Enable two-factor authentication on the WordPress.org account. Account compromise is how supply-chain attacks on plugins begin.
 - Re-run Plugin Check before every release, not only the first.
+- **Expect more reports, faster.** AI-assisted research made up about two-thirds of Wordfence's submissions by spring 2026, and total volume was up 453%. Keep the security contact monitored and triage within a day. The automated release review emails committers too, so the committer address must be one somebody reads.
+- **If you run a cloud service that talks to customer sites** (dashboards, connectors, remote backups), its keys are a supply-chain target. The October 2026 UpdraftCentral incident pushed backdoors to connected sites with genuinely signed commands. Design for that breach: see `security.md` Part 3 section O.
+- Test against the next WordPress release before it ships: `testing-tools.md`, "Testing against WordPress 7.2".

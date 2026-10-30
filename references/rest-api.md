@@ -94,6 +94,23 @@ register_rest_route( 'myplugin/v1', '/items/(?P<id>\d+)', array(
 
 The `args` schema is the right place for validation — it applies consistently and produces proper error responses. `enum`, `type`, `minimum`, `maximum`, `format` are enforced automatically.
 
+`args` validates **only the parameters it declares**. Anything else in the request passes through untouched and is still returned by `$request->get_params()`. So read declared parameters by name, and never merge the whole parameter set into `WP_Query`, `get_posts()`, `wp_insert_post()`, or `wp_update_user()` args. The wp2shell core RCE (July 2026) smuggled a scalar into `author__not_in` this way; see `security.md` Part 3 section L.
+
+### Batch requests
+
+`POST /wp-json/batch/v1` runs several sub-requests in one call, dispatching each one internally. A route joins only if it opts in:
+
+```php
+register_rest_route( 'myplugin/v1', '/items', array(
+    'methods'             => WP_REST_Server::CREATABLE,
+    'callback'            => 'myplugin_create_item',
+    'permission_callback' => static fn() => current_user_can( 'edit_posts' ),
+    'allow_batch'         => array( 'v1' => true ),   // leave out unless clients need it
+) );
+```
+
+In a sub-request, and in anything run through `rest_do_request()`, the superglobals (`$_GET`, `$_POST`, `$_SERVER['REQUEST_METHOD']`) belong to the **outer** request. Permission and route callbacks must read only the `WP_REST_Request` they receive.
+
 ## Callbacks
 
 ```php
@@ -246,5 +263,9 @@ Common codes: 400 bad request, 401 not authenticated, 403 authenticated but forb
 - **Returning unescaped HTML** expecting the client to render it raw.
 - **Leaking private fields** — emails, hashes, unpublished content — without a reader capability check.
 - **No rate limiting on expensive public endpoints.**
+- **`$request->get_params()` merged into query or insert args** — undeclared parameters skip validation.
+- **Request ID lists used without `wp_parse_id_list()`** — a scalar where an array was expected skips sanitization in core query classes.
+- **Reading `$_GET` / `$_POST` / `$_SERVER` in a callback** — wrong request in batches and internal dispatch.
+- **`allow_batch` enabled by habit** on routes no client batches.
 - **Breaking an existing route's response shape** instead of adding `/v2`.
 - **Forgetting `rest_ensure_response()`** when returning a bare array with headers.

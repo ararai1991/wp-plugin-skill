@@ -1,10 +1,10 @@
 ---
 name: wp-plugin-skill
-description: Build, review, and ship production-grade WordPress plugins — architecture, hooks, admin pages, settings, custom post types, taxonomies, metadata, users and capabilities, AJAX/REST, HTTP API, cron, shortcodes, blocks, the Abilities API and AI Client, internationalization, privacy, testing, and security hardening. Use when writing any WordPress plugin PHP code, scaffolding a new plugin, adding plugin features, reviewing plugin code for bugs or vulnerabilities, handling $_GET/$_POST, registering AJAX or REST endpoints or abilities, adding AI features, running $wpdb queries, or preparing a plugin for the WordPress.org directory.
+description: Build, review, and ship production-grade WordPress plugins — architecture, hooks, admin pages, settings, custom post types, taxonomies, metadata, users and capabilities, AJAX/REST, HTTP API, cron, shortcodes, blocks, the Abilities API and AI Client, internationalization, privacy, testing, and security hardening. Use when writing any WordPress plugin PHP or admin JavaScript, scaffolding a new plugin, adding plugin features, reviewing plugin code for bugs or vulnerabilities, handling $_GET/$_POST or file uploads, registering AJAX or REST endpoints or abilities, building import/export, backup, or remote-management features, storing API keys, adding AI features, running $wpdb queries, or preparing a plugin for the WordPress.org directory.
 license: MIT
 metadata:
-  version: "1.1.0"
-  updated: "2026-09-23"
+  version: "1.2.0"
+  updated: "2026-10-30"
   repository: "https://github.com/ararai1991/wp-plugin-skill"
 ---
 
@@ -97,6 +97,14 @@ The rule of thumb: **if getting it wrong means a security hole, data loss, or re
 
 > Should this import accept only data (CSV/JSON), or archives too? It needs `manage_options` at minimum; anything that can install code needs `install_plugins`.
 
+**Exports that get imported back, and user imports.** In October 2026, a subscriber's profile bio became an administrator account twice: once through a CSV export/import escape mismatch, and once through a backup's SQL dump.
+
+> Will this export ever be re-imported or restored? Should an import be able to set user roles at all? If so, which roles, and who may run it (`promote_users`)?
+
+**Remote control from a service.** "Connect your site to our dashboard" features ran stolen, validly signed commands that installed backdoors in October 2026.
+
+> Which commands should the remote service be able to run? Should plugin installs, user creation, or file writes be possible at all, and should the owner be notified or asked to confirm each one?
+
 ### Ask when it materially changes the work
 
 - **Scale** — "how many records do you expect?" decides meta vs. custom table, and whether pagination is needed.
@@ -140,7 +148,7 @@ Pick the file matching the task. Each maps to a Plugin Handbook chapter.
 |------|-----------|
 | Plugin header, file structure, activation/uninstall, architecture | `references/plugin-basics.md` |
 | Actions, filters, custom hooks, priority, removing hooks | `references/hooks.md` |
-| Capability + nonce + sanitize + escape; the 8 vulnerability classes | `references/security.md` |
+| Capability + nonce + sanitize + escape; the 8 vulnerability classes; 2026 incident patterns; storing credentials | `references/security.md` |
 | Every HTTP path into plugin code and the gates each needs | `references/entry-points.md` |
 | Admin menus, submenus, admin pages | `references/admin-pages.md` |
 | Settings API, Options API, settings pages | `references/settings.md` |
@@ -180,6 +188,8 @@ These apply to every line of plugin code. Details and code in `references/securi
 **Use `$wpdb->prepare()` for every query containing a variable** — and never interpolate into `prepare()`'s first argument. `esc_sql()` is not a substitute.
 
 **Never let user input reach** `eval()`, `assert()`, `create_function()`, `system()`, `exec()`, `shell_exec()`, `passthru()`, `include`/`require` with a variable path, `unserialize()`, `extract()`, or `call_user_func()` with a user-supplied name.
+
+**Validate the final value, and let the server decide.** Decode first, then validate; never decode after sanitizing. Filenames, extensions, destinations, post statuses, roles, and hook names come from server-side state or a fixed set, never from a field the client sends back.
 
 **Prefix everything public** — functions, classes, constants, options, meta keys, tables, script handles, globals. Four characters minimum; `wp_` is reserved.
 
@@ -223,4 +233,18 @@ Patterns behind the worst plugin CVEs of 2026 (`references/security.md` Part 3):
 - An ability with `__return_true` permissions, or a destructive ability annotated `readonly`
 - Model output echoed unescaped, or used as SQL, a callable, a URL, or a path
 
-**Speed matters.** The median time from disclosure to mass exploitation is about five hours, and WordPress.org now blocks releases that fail its automated security review. Treat a critical finding as a same-day fix.
+Added after the July–October 2026 incidents (`references/security.md` Part 3, sections I–P):
+
+- A later request that trusts a `url`, `path`, `name`, or `type` the client sends back. This was the Bricksforge upload RCE (CVSS 10.0, exploited in the wild)
+- A `nopriv` action that hands out nonces; an extension check that compares against `'php'`
+- A fixed-name `tmp`/`staging` directory under `uploads/` or `wp-content/`
+- `urldecode()` / `rawurldecode()` applied *after* a sanitizer (core CVE-2026-87902)
+- `$request->get_params()` or `$_GET` merged into `WP_Query` / `wp_insert_post()` args; ID lists without `wp_parse_id_list()` (wp2shell)
+- `$_GET` / `$_POST` read inside REST callbacks, which point at the wrong request in batches
+- CSV written and read with different escape settings; `addslashes()` in a SQL dump; a `role` column honored on import
+- `post_status`, `post_type`, or a hook name taken from request data
+- Remote-management keys that never expire, run as an administrator, or can install plugins by default
+- `$( attributeValue )`, `.html( response )`, or `innerHTML = data` in admin JavaScript
+- `->reveal()` on a secret anywhere near `echo`, a log, or a response
+
+**Speed matters.** The median time from disclosure to mass exploitation is about five hours, and in late 2026 core bugs were attacked within 90 minutes to a day of the patch, with exploits built from the diff. WordPress.org now blocks releases that fail its automated security review. Treat a critical finding as a same-day fix, and release it for every supported branch at once.

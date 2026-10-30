@@ -201,6 +201,47 @@ grep -rn "wp_register_ability\|wp_ai_client_prompt\|generate_text\|generate_imag
 
 ---
 
+## Phase 7d — Multi-step flows, query shaping, exports, and remote control
+
+Patterns from July–October 2026, including the Bricksforge RCE, wp2shell, Backuply, and UpdraftCentral. See `security.md` Part 3, sections I–P.
+
+- [ ] Multi-step flows (upload → submit, start → confirm) keep state server-side behind an opaque token. No step trusts a `url`, `path`, `name`, `dest`, or `type` the client sends back
+- [ ] The final filename and extension are chosen by the server. Extensions are allowlisted after lowercasing and full decoding, not compared to a `php` blocklist
+- [ ] No `nopriv` action hands out nonces, and no public flow treats a nonce as authorization
+- [ ] No fixed-name staging or temp directory under `uploads/` or `wp-content/`. Staging is random per run and removed in `finally`
+- [ ] No decoding (`urldecode`, `rawurldecode`, `html_entity_decode`, `base64_decode`) after a sanitizer or validator has run
+- [ ] `$request->get_params()` / `$_GET` are never merged into `WP_Query`, `get_posts()`, `wp_insert_post()`, or `wp_update_user()` args
+- [ ] ID lists reaching `*__in` / `*__not_in` / `exclude` / `include` pass through `wp_parse_id_list()` whatever type arrives
+- [ ] `allow_batch` is enabled only where needed. REST callbacks and permission callbacks read `$request`, never superglobals
+- [ ] Export and import use identical CSV `$separator` / `$enclosure` / `$escape` (escape `''`). Hand-built SQL dumps escape every value and never use `addslashes()`
+- [ ] Imports never take `role`, `ID`, `user_pass`, or capabilities from the file without an allowlist and a `promote_users` check
+- [ ] CSV exports neutralize cells that start with `=`, `+`, `-`, `@`, tab, or CR
+- [ ] `post_status` and `post_type` passed to `wp_insert_post()` come from fixed sets. Publishing checks the type's `publish_posts` capability
+- [ ] No hook name (`do_action` / `apply_filters`) is built from request data
+- [ ] Remote-management or SaaS-connect features: opt-in, scoped command allowlist, least-privilege user, expiring keys, logging, and no plugin install by default
+- [ ] Plugin/theme installs from code require `install_plugins` and an allowlisted download host
+- [ ] JavaScript never passes attributes, URL fragments, or responses to `$()`, `.html()`, `innerHTML`, or `insertAdjacentHTML()`
+- [ ] Providers added with `wp_oembed_add_provider()` return HTML you would print unescaped
+- [ ] Usernames, emails, display names, and privacy-request values are escaped wherever they're shown
+- [ ] Data is authorized before it is fetched. Compound capability conditions are tested per role. Notes require `edit_post`
+- [ ] Secrets: `->reveal()` output never reaches output, logs, or responses. Secrets API calls are feature-detected
+
+```bash
+grep -rn "wp_ajax_nopriv_[a-z_]*nonce" --include=*.php .
+grep -rnE "\[ *['\"](url|path|filename|destination|target)['\"] *\]" --include=*.php . | grep -E "file_put_contents|copy\(|rename\("
+grep -rnE "(raw)?urldecode\( *sanitize_|html_entity_decode\( *sanitize_" --include=*.php .
+grep -rnE "WP_Query\( *(\\\$_|array_merge|\\\$request->get_)" --include=*.php .
+grep -rn "allow_batch\|wp_parse_id_list" --include=*.php .
+grep -rnE "fputcsv|fgetcsv|str_getcsv|addslashes|INSERT INTO" --include=*.php .
+grep -rnE "['\"]post_(status|type)['\"] *=> *[^,]*\\\$_(GET|POST|REQUEST)" --include=*.php .
+grep -rnE "(do_action|apply_filters)\( *[^,]*\\\$_(GET|POST|REQUEST)" --include=*.php .
+grep -rnE "Plugin_Upgrader|->install\(|openssl_verify|sodium_crypto_sign_verify_detached" --include=*.php .
+grep -rnE "(\\$|jQuery)\( *([a-zA-Z_.]*getAttribute|.*\)\.(attr|data)\(|decodeURIComponent)|innerHTML *=|insertAdjacentHTML" --include=*.js --exclude=*.min.js .
+grep -rn "wp_oembed_add_provider\|->reveal(" --include=*.php .
+```
+
+---
+
 ## Phase 8 — SSRF, redirects, and external requests
 
 - [ ] `wp_safe_remote_*()` used wherever the URL is influenced by input

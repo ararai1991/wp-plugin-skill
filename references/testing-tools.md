@@ -210,6 +210,20 @@ xdebug.client_port=9003
 - With another popular plugin active, and with a default theme
 - At the minimum supported WordPress and PHP versions
 - Uninstall — verify options, meta, tables, and cron events are gone
+- Multi-step flows: replay step 2 with edited `path`/`url`/`type` fields and with another user's token — must fail
+- Export, then re-import, a record whose text fields contain `\"`, newlines, `'`, and `=1+1` — the import must produce exactly the same record, and no extra rows
+- Batch: if any route has `allow_batch`, send it through `/wp-json/batch/v1` mixed with invalid sub-requests, logged out — each sub-request must get its own permission check
+
+## Testing against WordPress 7.2
+
+WordPress 7.2 is scheduled for **December 8, 2026** (RC1 on November 17). Run your tests against the beta or RC before then; these changes were in the beta:
+
+- **Admin script and style concatenation removed.** `load-scripts.php` and `load-styles.php` return `410 Gone`, and `CONCATENATE_SCRIPTS` is ignored. Anything that links to those loaders directly breaks; enqueue normally instead.
+- **`wp_kses()` rebuilt on the HTML API** (7.2 or 7.3). Output is normalized, and disallowed `script`/`style` elements are removed *with their contents*. Tests that compare sanitized HTML byte-for-byte will fail. The `wp_kses_force_legacy_parser` filter is a temporary stopgap, not a fix.
+- **Secrets API** for credentials. See `security.md` §8. Feature-detect it; don't require it.
+- Security releases now arrive faster than release cycles. Keep `Tested up to` honest, and run your suite against each minor release: four security releases (7.1.1–7.1.4) shipped between September 17 and October 28, 2026.
+
+Make sure the PHP versions you test on are patched as well. The October 21, 2026 "php2shell" PHP fixes (8.2.35, 8.3.36, 8.4.27, 8.5.12) closed remotely exploitable memory bugs. A CI image pinned to an older patch release tests a configuration nobody should be running.
 
 ## CI
 

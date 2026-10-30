@@ -97,6 +97,39 @@ wp core verify-checksums
 
 A plugin name suggesting debugging, caching, security, or "maintenance" — especially with **no WordPress.org listing, no readme, and a capitalized folder name** — is a common disguise. WordPress.org's automated release review now blocks many of these at the directory; plugins installed from zip files, nulled "premium" downloads, or left behind by a previous compromise bypass that entirely.
 
+### Pushed through a stolen remote-management key (October 2026)
+
+On October 18–19, 2026, attackers used stolen **UpdraftCentral** connection keys to send genuine, correctly signed `plugin.upload_plugin` commands. WordPress installed and activated the plugins through its normal installer. Nothing on the site was exploited, so file-integrity checks and login protection saw nothing unusual. Patchstack and Nethemba documented 99 plugin names. The backdoor:
+
+- hooked early into every request and waited for a secret URL parameter carrying a **32-character token**,
+- on a match, created a user with a hardcoded password, set the role to **Editor**, then added **`manage_options` and `install_plugins`** directly to that user,
+- logged the visitor in with a persistent auth cookie, **bypassing the login form**, two-factor authentication, and login-limit plugins,
+- kept the account after the plugin was removed.
+
+Signals:
+
+```bash
+# The description line shared by the samples, and the recurring name
+grep -rl "Small maintenance toolkit: keeps option storage tidy" wp-content/plugins/
+grep -rli "Site Health Cache" wp-content/plugins/*/
+
+# Editors who can also manage options or install plugins: detect by capability, not by name
+wp eval 'foreach ( get_users( array( "role" => "editor" ) ) as $u ) { if ( user_can( $u, "manage_options" ) || user_can( $u, "install_plugins" ) ) { echo $u->ID, " ", $u->user_login, " ", $u->user_email, PHP_EOL; } }'
+
+# Leftovers and the connection itself
+wp option get _sync_token
+wp option get updraft_central_localkeys   # any output means the site accepts remote commands
+```
+
+The user markers were an `@example.org` email and the display name "Site Tools". The confirmed usernames (`data-ops43`, `media-staff96`) are worth checking, but they are easy to change. Remediation order matters:
+
+1. **Delete the remote-management key first,** or the attacker pushes a replacement.
+2. **Deactivate the plugin and move it out of the webroot.** Don't delete it from wp-admin: its uninstall routine erases traces. Don't "fix" its fatal error either; the samples' bug was what alerted the first victims, and repairing it arms the backdoor.
+3. Remove the backdoor user and the `_sync_token` option, rotate administrator passwords, and end all sessions (`wp user session destroy --all`).
+4. If the user existed or the trigger appears in access logs, treat the site as fully compromised and restore from a pre-attack backup.
+
+For plugin authors, the lesson is in `security.md` Part 3 section O: a remote-management channel is a root credential, and the site-side limits have to hold when your cloud doesn't.
+
 ## Callback to external infrastructure
 
 ```bash

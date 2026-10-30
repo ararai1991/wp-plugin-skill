@@ -26,7 +26,7 @@ A skill that teaches Claude the full [WordPress Plugin Handbook](https://develop
 
 </div>
 
-> **New in 1.1.0** — the patterns behind 2026's worst plugin CVEs (broken "safe unserialize" helpers, `is_callable()` as an allowlist, comments reaching `do_blocks()`, second-order SQLi in restores), the **Abilities API** and **AI Client**, WordPress.org's new automated release blocking, and the **EU Cyber Resilience Act** reporting duties now in force. 16 new scanner checks. [Full changelog →](CHANGELOG.md)
+> **New in 1.2.0**: the July–October 2026 incidents. These include the **Bricksforge** upload RCE (exploited in the wild), stolen **UpdraftCentral** keys pushing backdoors, **Backuply** and CSV import escape bugs that turned a subscriber's bio into an admin account, the **wp2shell** core chain, and core 7.1.2–7.1.4 (decode-after-sanitize traversal, exploited staging directory, hook-name collisions, jQuery and Interactivity API XSS). Also new: the **Secrets API** coming in WordPress 7.2, and a 7.2 test plan. The scanner gains 24 checks, including admin JavaScript. [Full changelog →](CHANGELOG.md)
 
 ---
 
@@ -113,7 +113,7 @@ It does **not** ask about sanitizing, escaping, nonces, or prefixing. Those are 
 
 ### 3. Progressive disclosure
 
-24 reference files, ~6,000 lines. Claude loads only what the current task needs — the metadata reference when you touch post meta, the cron reference when you schedule a task. Depth without drowning the context window.
+24 reference files, ~6,300 lines. Claude loads only what the current task needs — the metadata reference when you touch post meta, the cron reference when you schedule a task. Depth without drowning the context window.
 
 ## Install
 
@@ -133,7 +133,7 @@ That's it. The skill activates automatically when you work on WordPress plugin c
 cd ~/.claude/skills/wp-plugin-skill
 
 git pull                      # latest
-git checkout v1.1.0           # or pin an exact release
+git checkout v1.2.0           # or pin an exact release
 git tag -l                    # list available versions
 ```
 
@@ -161,7 +161,7 @@ Every chapter of the Plugin Handbook, plus the security, performance, and databa
 **Foundations**
 - Plugin header, structure, lifecycle, architecture
 - Actions, filters, custom hooks, priority
-- Security: gates, sanitizing, escaping, 8 CVE classes
+- Security: gates, sanitizing, escaping, 8 CVE classes, 2026 incident patterns
 - Every HTTP path into plugin code
 
 **Admin & data**
@@ -180,6 +180,8 @@ Every chapter of the Plugin Handbook, plus the security, performance, and databa
 - Outbound HTTP, caching, SSRF defense
 - WP-Cron, shortcodes, blocks
 - Abilities API and AI Client (WP 6.9 / 7.0)
+- Secrets API for credentials (WP 7.2)
+- Import/export, backups, remote management
 
 **Shipping**
 - Translation functions, text domains
@@ -187,6 +189,7 @@ Every chapter of the Plugin Handbook, plus the security, performance, and databa
 - WP_DEBUG, WP-CLI, PHPUnit, PHPCS
 - Caching, query efficiency
 - Directory submission, Plugin Check
+- WordPress 7.2 test plan
 
 </td></tr>
 </table>
@@ -217,10 +220,16 @@ Security       12 flagged  (2 critical-pattern hits)
 Functionality   6 flagged
 ```
 
-**102 checks.** 73 security (broken access control, XSS, CSRF, SQLi, file upload/traversal, object injection, SSRF, data exposure, backdoor indicators, and the 2026 incident patterns: unsafe unserialize helpers, user content reaching block parsers, auth-cookie bypasses, archive extraction, AI and ability endpoints) and 29 functionality — including whole-codebase pairings that catch *absences*: a CPT registered but rewrite rules never flushed, cron scheduled but never cleared, options written but no uninstall routine.
+**126 checks.** There are 94 security checks:
+
+- the classic classes: broken access control, XSS, CSRF, SQLi, file upload/traversal, object injection, SSRF, data exposure, and backdoor indicators
+- the 2026 incident patterns: unsafe unserialize helpers, user content reaching block parsers, auth-cookie bypasses, archive extraction, AI and ability endpoints, client-trusted upload paths, decode-after-sanitize, request data shaping `WP_Query`, REST batching, CSV/SQL-dump escaping, roles from imports, hook names from input, remote-command channels, and revealed secrets
+- DOM XSS sinks in admin JavaScript
+
+The other 32 are functionality checks. They include whole-codebase pairings that catch *absences*: a CPT registered but rewrite rules never flushed, cron scheduled but never cleared, options written but no uninstall routine. They also flag the things WordPress 7.2 breaks.
 
 ```bash
-./scripts/wp-plugin-audit.sh --version    # wp-plugin-audit 1.1.0
+./scripts/wp-plugin-audit.sh --version    # wp-plugin-audit 1.2.0
 ```
 
 > **This is triage, not proof.** Every hit needs manual confirmation, and an empty result is not evidence of safety. Then run the real tools:
@@ -257,9 +266,9 @@ The `SKILL.md` + `references/` structure is designed for Claude Code's skill sys
 </details>
 
 <details>
-<summary><strong>Will it slow Claude down with 6,000 lines of context?</strong></summary>
+<summary><strong>Will it slow Claude down with 6,300 lines of context?</strong></summary>
 
-No. `SKILL.md` is the only file always loaded (~15KB). The 24 references load on demand — the cron reference only when you're scheduling tasks. That's the point of the structure.
+No. `SKILL.md` is the only file always loaded (~18KB). The 24 references load on demand — the cron reference only when you're scheduling tasks. That's the point of the structure.
 </details>
 
 <details>
@@ -283,7 +292,7 @@ Yes, for plugins you own, run, or are authorized to audit — and to check third
 <details>
 <summary><strong>How current is this?</strong></summary>
 
-Built against the Plugin Handbook and 2026 advisories from Wordfence, Patchstack, WPScan, and Sucuri — so it covers what's being exploited now (conditional-trigger backdoors, broken "safe unserialize" helpers, second-order SQLi in restore code, the `permission_callback` trap), not just textbook OWASP. Each release is dated in the [changelog](CHANGELOG.md) with what it added; the last security refresh was **1.1.0 on 2026-09-23**. The security landscape moves, so issues and PRs are welcome.
+Built against the Plugin Handbook, WordPress core's security releases, and 2026 advisories from Wordfence, Patchstack, WPScan, and Sucuri. So it covers what's being exploited now, not just textbook OWASP: conditional-trigger backdoors, broken "safe unserialize" helpers, client-trusted upload paths, second-order SQLi in backups and restores, stolen remote-management keys, and the `permission_callback` trap. Each release is dated in the [changelog](CHANGELOG.md) with what it added; the last security refresh was **1.2.0 on 2026-10-30**. The security landscape moves, so issues and PRs are welcome.
 </details>
 
 ## Contributing

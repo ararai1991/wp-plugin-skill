@@ -5,16 +5,17 @@
 # Usage: ./wp-plugin-audit.sh <plugin-directory>
 #        ./wp-plugin-audit.sh --version
 #
+# Scans PHP files, plus non-minified JavaScript for DOM XSS sinks.
 # This is triage, not proof. Every hit needs manual confirmation: check whether
 # the code path is reachable, who can reach it, and whether a control exists
 # nearby that the grep could not see. Absence of hits is not evidence of safety.
 #
-# All patterns below are SINGLE-QUOTED. They contain '$' and '\' which the shell
-# would otherwise expand or mangle. Do not convert them to double quotes.
+# Patterns are SINGLE-QUOTED: they contain '$' and '\' that the shell would
+# otherwise mangle. The few needing a literal quote are double-quoted, no '$'.
 
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 
 case "${1:-}" in
     -v|--version)
@@ -22,7 +23,7 @@ case "${1:-}" in
         exit 0
         ;;
     -h|--help)
-        sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
 esac
@@ -36,12 +37,25 @@ if [ ! -d "$DIR" ]; then
 fi
 
 if command -v rg >/dev/null 2>&1; then
+    # Exclusion globs use **/ so they also apply when <plugin-directory> is an
+    # absolute path or lies outside the current directory.
     SEARCH() { rg --no-heading --line-number --color=never -e "$1" -g '*.php' \
-                  -g '!vendor/**' -g '!node_modules/**' "$DIR" 2>/dev/null; }
+                  -g '!**/vendor/**' -g '!**/node_modules/**' "$DIR" 2>/dev/null; }
+    # JavaScript: hand-written sources only. Minified and build output is skipped,
+    # and long lines are cut so a bundle cannot flood the report.
+    SEARCH_JS() { rg --no-heading --line-number --color=never -e "$1" -g '*.js' \
+                     -g '!*.min.js' -g '!**/vendor/**' -g '!**/node_modules/**' \
+                     -g '!**/build/**' -g '!**/dist/**' "$DIR" 2>/dev/null | cut -c1-300; }
 else
     SEARCH() { grep -rnE --include='*.php' --exclude-dir=vendor \
                     --exclude-dir=node_modules -e "$1" "$DIR" 2>/dev/null; }
+    SEARCH_JS() { grep -rnE --include='*.js' --exclude='*.min.js' --exclude-dir=vendor \
+                       --exclude-dir=node_modules --exclude-dir=build --exclude-dir=dist \
+                       -e "$1" "$DIR" 2>/dev/null | cut -c1-300; }
 fi
+
+# check() searches with $SEARCHER; check_js() points it at JavaScript for one call.
+SEARCHER=SEARCH
 
 TOTAL=0
 CRIT=0
@@ -61,7 +75,7 @@ check() {
         '~'*) label="${label#\~}"; color="1;34"; kind="func" ;;
     esac
 
-    out="$(SEARCH "$pattern")" || true
+    out="$("$SEARCHER" "$pattern")" || true
     [ -z "$out" ] && return 0
 
     n="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
@@ -77,6 +91,13 @@ check() {
     printf '%s\n' "$out" | head -n 20 | sed 's/^/  /'
     [ "$n" -gt 20 ] && printf '  \033[2m... %s more\033[0m\n' "$((n - 20))"
     return 0
+}
+
+# check_js <label> <pattern> [note]  — same as check, over JavaScript sources.
+check_js() {
+    SEARCHER=SEARCH_JS
+    check "$@"
+    SEARCHER=SEARCH
 }
 
 # absent <label> <pattern> <note>  — flags when a pattern is NOT found anywhere.
@@ -116,6 +137,9 @@ printf '\033[1mWordPress Plugin Audit\033[0m  \033[2mv%s\033[0m\n' "$VERSION"
 printf 'Target: %s\n' "$DIR"
 printf 'PHP files: %s\n' \
     "$(find "$DIR" -name '*.php' -not -path '*/vendor/*' -not -path '*/node_modules/*' 2>/dev/null | wc -l | tr -d ' ')"
+printf 'JS files:  %s \033[2m(excluding minified, build/, dist/)\033[0m\n' \
+    "$(find "$DIR" -name '*.js' -not -name '*.min.js' -not -path '*/vendor/*' -not -path '*/node_modules/*' \
+        -not -path '*/build/*' -not -path '*/dist/*' 2>/dev/null | wc -l | tr -d ' ')"
 
 # ---------------------------------------------------------------------------
 section "1. ATTACK SURFACE"
@@ -228,6 +252,17 @@ check 'href/src built from a variable' \
 check 'Unquoted attribute output' \
     '=<\?php\s+echo' \
     'Unquoted attributes are exploitable even when the value is escaped.'
+
+# ---------------------------------------------------------------------------
+section "4b. CLIENT-SIDE XSS (JavaScript)"
+
+check_js 'jQuery called on a raw attribute or decoded value' \
+    '(\$|jQuery)\(\s*([A-Za-z_$.]*\.getAttribute\s*\(|(\$|jQuery)\(\s*[^)]*\)\.(attr|data)\s*\(|decodeURIComponent\s*\()' \
+    '$( string ) builds HTML when the string starts with < (core stored XSS via a comment link href, fixed in 7.1.3). Use $( document ).find( selector ).'
+
+check_js 'HTML sink with a non-literal value' \
+    '(innerHTML|outerHTML)\s*\+?=\s*[A-Za-z_$(]|insertAdjacentHTML\s*\(\s*[^,]+,\s*[A-Za-z_$(]|\.html\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*\)' \
+    'Data belongs in .text() / textContent / .attr(). PHP escaping does not survive re-insertion as HTML.'
 
 # ---------------------------------------------------------------------------
 section "5. SQL INJECTION"
@@ -372,6 +407,87 @@ check '!AI prompt from an unauthenticated action' \
     'Anyone on the internet can spend the site owner'"'"'s AI budget and inject prompts.'
 
 # ---------------------------------------------------------------------------
+section "7c. MULTI-STEP FLOWS, QUERIES, EXPORTS & REMOTE CONTROL (Jul-Oct 2026 patterns)"
+
+check '!Nonce handed out by a public action' \
+    'add_action\(\s*.wp_ajax_nopriv_[A-Za-z0-9_]*nonce' \
+    'Any visitor can mint one, so a nonce on a public flow is not a gate. Bricksforge (CVSS 10.0, exploited Oct 2026) had exactly this.'
+
+check 'File write to a path taken from a data field' \
+    '(file_put_contents|copy|rename|move_uploaded_file)\s*\([^;]*(\[\s*.(url|path|filename|dest|destination|target).\s*\]|->(url|path|filename|dest|destination|target)\b)' \
+    'Confirm the destination is built server-side. A client-echoed url field decided where Bricksforge wrote PHP.'
+
+check 'Executable extension compared against a blocklist' \
+    "(===?|!==?)\s*[\"']\.?(php|phtml|phar)[\"']|[\"']\.?(php|phtml|phar)[\"']\s*(===?|!==?)|in_array\s*\([^;]*[\"']\.?(php|phtml)[\"']\s*," \
+    'Blocklists miss .php5 / .phtml / .PHP / .%70hp. Allowlist the final extension after lowercasing and full decoding.'
+
+check 'Fixed staging directory in a web-reachable path' \
+    '(basedir.\]|WP_CONTENT_DIR|wp_upload_dir\(\))[^;]*/(tmp|temp|staging|extract|unzip)\b' \
+    'Predictable, web-reachable staging was exploited in core within a day (7.1.4, Oct 2026). Random dir per run, outside the webroot where possible.'
+
+check 'Decoding after sanitizing' \
+    '(rawurldecode|urldecode|html_entity_decode|wp_specialchars_decode|base64_decode)\s*\(\s*(sanitize_|esc_|wp_kses)' \
+    'Decoding undoes the sanitizer: CVE-2026-87902 (core path traversal) survived sanitize_title() this way. Decode first, then validate.'
+
+check '!Request data shapes a core query' \
+    '(WP_Query|WP_User_Query|WP_Term_Query|WP_Comment_Query|get_posts|get_users|get_terms|query_posts)\s*\(\s*(\$_(GET|POST|REQUEST)|\$request->get_[a-z_]*params\s*\(|array_merge\s*\([^;]*(\$_(GET|POST|REQUEST)|get_[a-z_]*params\s*\())' \
+    'Undeclared params skip validation, and core sanitizes some query vars only when the type is right (wp2shell, CISA KEV).'
+
+check 'ID list taken from the request' \
+    '(__in|__not_in|exclude|include).\s*=>\s*(\(array\)\s*)?\$(_(GET|POST|REQUEST)|request\s*\[)' \
+    'Run every request ID list through wp_parse_id_list(). A scalar skipped sanitization in the wp2shell SQL injection.'
+
+check 'REST route accepts batch requests' \
+    'allow_batch' \
+    'Sub-requests are dispatched internally and superglobals describe the OUTER request. Callbacks must read only $request.'
+
+check 'Superglobals in a REST permission callback' \
+    'permission_callback.{0,4}=>[^;]*\$_(GET|POST|REQUEST|SERVER)' \
+    'Decide from the WP_REST_Request passed in. In batch / internal dispatch the superglobals belong to another request.'
+
+check 'Hand-built SQL dump' \
+    '(INSERT INTO|VALUES\s*\().*addslashes|addslashes.*(INSERT INTO|VALUES)|(fwrite|fputs|gzwrite|file_put_contents)\s*\([^;]*INSERT INTO' \
+    'One mis-escaped field becomes SQL on restore (Backuply, subscriber -> admin, Oct 2026). Prefer mysqldump / wp db export.'
+
+check 'addslashes() used as escaping' \
+    '(^|[^a-z_>])addslashes\s*\(' \
+    'Not SQL-, CSV-, shell- or JS-safe. Use $wpdb->prepare() / esc_sql(), fputcsv() with escape '"''"', escapeshellarg(), wp_json_encode().'
+
+# CSV calls that don't pass an explicit empty escape ('' or "") as the last argument.
+CSV_ESC="$( SEARCH '(fputcsv|fgetcsv|str_getcsv)\s*\(' | grep -vE ",\s*(''|\"\")\s*\)" || true )"
+if [ -n "$CSV_ESC" ]; then
+    n="$( printf '%s\n' "$CSV_ESC" | wc -l | tr -d ' ' )"
+    TOTAL=$(( TOTAL + n ))
+    printf '\n\033[1;33m[%s]\033[0m (%s)\n' 'CSV read/write without an explicit escape' "$n"
+    printf '  \033[2m%s\033[0m\n' "Writer and reader must pass identical separator/enclosure/escape. Use escape ''. A mismatch turned a bio into an admin account (CVE-2026-104368)."
+    printf '%s\n' "$CSV_ESC" | head -n 20 | sed 's/^/  /'
+fi
+
+check 'Role taken from imported or bulk data' \
+    '(.role.\s*=>|->set_role\s*\(|->add_role\s*\()\s*\$(row|data|line|record|item|csv|import|fields|entry|cols|columns|values)\b' \
+    'If the data came from a file or request, the file decides privileges. Allowlist roles (never administrator) and require promote_users.'
+
+check '!post_status / post_type from request data' \
+    '.post_(status|type).\s*=>\s*(sanitize_[a-z_]+\s*\(\s*)?(wp_unslash\s*\(\s*)?\$_(GET|POST|REQUEST)' \
+    'wp_insert_post() checks no capabilities, and unregistered values fired unrelated core hooks (delete_post) until 7.1.3. Use a fixed set.'
+
+check '!Hook name built from request data' \
+    '(do_action|apply_filters|do_action_ref_array|apply_filters_ref_array)\s*\(\s*[^,;]*\$_(GET|POST|REQUEST|COOKIE)' \
+    'The caller chooses which callbacks run. Map input to a fixed list of hook names.'
+
+check 'Plugin/theme install from code' \
+    'new\s+(Plugin|Theme)_Upgrader|->install\s*\(\s*\$' \
+    'Requires install_plugins (not just a nonce or a login) and an allowlisted download host. Remote installs delivered the Oct 2026 backdoors.'
+
+check 'Signed remote commands' \
+    '(openssl_verify|sodium_crypto_sign_verify_detached)\s*\(' \
+    'If this authorizes commands from a remote dashboard: opt-in, scoped allowlist, least-privilege user, expiring keys, logging (UpdraftCentral, Oct 2026).'
+
+check 'oEmbed provider registered (trusted)' \
+    'wp_oembed_add_provider\s*\(' \
+    'Registered providers skip oEmbed sandboxing. Only add providers whose HTML you would print unescaped.'
+
+# ---------------------------------------------------------------------------
 section "8. SSRF & REDIRECTS"
 
 check 'Remote requests (unsafe variants)' \
@@ -408,6 +524,10 @@ check 'Debug output' \
 check 'Logging' \
     'error_log\(' \
     'Never log secrets; never write logs inside the webroot.'
+
+check '!Revealed secret sent to output' \
+    '(echo|print|printf|error_log|wp_send_json[a-z_]*|wp_die|var_dump|print_r|var_export|header)\s*\(?[^;]*->reveal\s*\(' \
+    'WP_Secret::reveal() returns the plaintext (WordPress 7.2+). Use it at the point of use only, never in output, logs, or responses.'
 
 check '!Timing-unsafe secret comparison' \
     '(token|secret|signature|hash|key)\s*(==|===)\s*\$' \
@@ -568,6 +688,19 @@ paired '~AI Client used without a version guard' \
     'wp_ai_client_prompt\s*\(' \
     'function_exists\(\s*.wp_ai_client_prompt' \
     'wp_ai_client_prompt() only exists on WordPress 7.0+; fatal error on older sites.'
+
+paired '~Secrets API used without a version guard' \
+    'wp_(get|set)_secret\s*\(' \
+    'function_exists\(\s*.wp_(get|set)_secret' \
+    'The Secrets API exists only on WordPress 7.2+; fatal error on older sites. Feature-detect and fall back.'
+
+check '~Direct link to the admin asset loaders' \
+    'load-(scripts|styles)\.php|CONCATENATE_SCRIPTS' \
+    'WordPress 7.2 returns 410 Gone for load-scripts.php / load-styles.php and ignores CONCATENATE_SCRIPTS. Enqueue assets normally.'
+
+check '~Legacy kses parser forced' \
+    'wp_kses_force_legacy_parser' \
+    'A stopgap for the 7.2/7.3 wp_kses() rebuild; the legacy parser is slated for removal. Fix the code that depends on old output.'
 
 check '~Requires PHP below 7.4' \
     'Requires PHP:\s*(5\.|7\.[0-3]([^0-9]|$))' \
